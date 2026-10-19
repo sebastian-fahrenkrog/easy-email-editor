@@ -1,5 +1,5 @@
 import React, { Suspense } from 'react';
-import { Router, Switch, Route } from 'react-router-dom';
+import { Router, Switch, Route, Redirect } from 'react-router-dom';
 import { Provider } from 'react-redux';
 import Page from '@demo/components/Page';
 import store from '@demo/store';
@@ -8,8 +8,8 @@ import { history } from './utils/history';
 import Home from '@demo/pages/Home';
 
 const Editor = React.lazy(() => import('@demo/pages/Editor'));
-
 function App() {
+
   return (
     <Provider store={store}>
       <Page>
@@ -45,12 +45,13 @@ function App() {
               <Route
                 path='/'
                 exact
-                component={Home}
+                component={Editor}
               />
               <Route
                 path='/editor'
                 component={Editor}
               />
+              <Redirect to='/editor' />              
             </Switch>
           </Router>
         </Suspense>

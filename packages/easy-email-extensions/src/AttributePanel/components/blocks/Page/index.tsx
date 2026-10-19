@@ -13,7 +13,7 @@ import { AttributesPanelWrapper } from '@extensions/AttributePanel/components/at
 import { FontFamily } from '../../attributes/FontFamily';
 import { pixelAdapter } from '../../adapter';
 
-interface PageProps { hideSubTitle?: boolean; hideSubject?: boolean}
+interface PageProps { hideSubTitle?: boolean; hideSubject?: boolean; }
 export function Page({ hideSubTitle, hideSubject }: PageProps) {
   const { focusIdx } = useFocusIdx();
 
@@ -28,14 +28,14 @@ export function Page({ hideSubTitle, hideSubject }: PageProps) {
             header={t('Email Setting')}
           >
             <Space direction='vertical'>
-              {!hideSubject && (
+              {hideSubject && (
                 <TextField
                   label={t('Subject')}
                   name={'subject'}
                   inline
                 />
               )}
-              {!hideSubTitle && (
+              {hideSubTitle && (
                 <TextField
                   label={t('SubTitle')}
                   name={'subTitle'}

@@ -4,6 +4,7 @@ import { USER } from '@demo/constants';
 
 const sessionKey = 'session-key';
 const tokenKey = 'token-key';
+
 export class UserStorage {
   static async getAccount(): Promise<IUser> {
     const token = window.localStorage.getItem(tokenKey);
@@ -18,7 +19,7 @@ export class UserStorage {
             headers: {
               authorization: token,
             },
-            baseURL: 'https://www.maocanhua.cn',
+            baseURL: 'https://www.content-optimizer.de',
           });
           account = data;
         } catch (error) {
@@ -26,19 +27,6 @@ export class UserStorage {
           return this.getAccount();
         }
       }
-    } else {
-      const { data } = await axios.post<IUser>(
-        '/user/visitor/login',
-        {
-          phone: USER.phone,
-          password: USER.password,
-        },
-        {
-          baseURL: 'https://www.maocanhua.cn',
-        }
-      );
-
-      account = data;
     }
     window.sessionStorage.setItem(sessionKey, JSON.stringify(account));
     window.localStorage.setItem(tokenKey, account.token);

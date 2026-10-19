@@ -1,26 +1,48 @@
 import { defineConfig } from 'vite';
 import styleImport from 'vite-plugin-style-import';
 import path from 'path';
-import { injectHtml } from 'vite-plugin-html';
+//import { injectHtml } from 'vite-plugin-html';
 
 export default defineConfig({
+  server: {
+    watch: {
+      followSymlinks: false
+    },
+    fs: {
+      strict: false,
+    },
+  },
   resolve: {
     alias: {
+      'easy-email-editor/lib/style.css': path.resolve(__dirname, 'package.json'),
+      'easy-email-extensions/lib/style.css': path.resolve(__dirname, 'package.json'),
       '@demo': path.resolve(__dirname, './src'),
+      '@extensions': path.resolve('../packages/easy-email-extensions/src'),
+      '@core': path.resolve('../packages/easy-email-core/src'),
+      '@arco-themes': path.resolve('./node_modules/@arco-themes'),
       react: path.resolve('./node_modules/react'),
       'react-final-form': path.resolve(__dirname, './node_modules/react-final-form'),
       'easy-email-localization': path.resolve('../packages/easy-email-localization'),
-      'easy-email-core': path.resolve('../packages/easy-email-core'),
-      'easy-email-editor': path.resolve('../packages/easy-email-editor'),
-      'easy-email-extensions': path.resolve('../packages/easy-email-extensions'),
+      'easy-email-editor': path.resolve('../packages/easy-email-editor/src/index.tsx'),
+      '@': path.resolve('../packages/easy-email-editor/src'),
+      'easy-email-core': path.resolve('../packages/easy-email-core/src/index.tsx'),
+      'easy-email-extensions': path.resolve(
+        '../packages/easy-email-extensions/src/index.tsx',
+      ),
+      '@arco-design/web-react/dist/css/arco.css': path.resolve(
+        './node_modules/@arco-design/web-react/dist/css/arco.css',
+      ),
     },
   },
   optimizeDeps: {},
   define: {},
+  esbuild: {
+    jsxInject: 'import "@arco-design/web-react/dist/css/arco.css";',
+  },
   build: {
-    minify: true,
+    minify: false,
     manifest: true,
-    sourcemap: true,
+    sourcemap: false,
     target: 'es2015',
     rollupOptions: {
       output: {
@@ -33,6 +55,9 @@ export default defineConfig({
           }
           if (/\/node_modules\/mjml-browser\/.*/.test(id)) {
             return 'mjml-browser';
+          }
+          if (/easy-email.*/.test(id)) {
+            return 'easy-email-editor';
           }
         },
       },
@@ -66,11 +91,6 @@ export default defineConfig({
           resolveComponent: name => `@arco-design/web-react/icon/react-icon/${name}`,
         },
       ],
-    }),
-    injectHtml({
-      data: {
-        buildTime: `<meta name="updated-time" content="${new Date().toUTCString()}" />`,
-      },
     }),
   ].filter(Boolean),
 });

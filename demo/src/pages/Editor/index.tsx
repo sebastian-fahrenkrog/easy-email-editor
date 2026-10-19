@@ -69,6 +69,204 @@ import axios from 'axios';
 import enUS from '@arco-design/web-react/es/locale/en-US';
 
 console.log(localesData);
+// Theme Block interface for blocks.json from Mautic themes
+interface ThemeBlock {
+  label: string;
+  content: string;  // MJML string
+  category: string;
+  attributes?: {
+    class?: string;
+  };
+}
+
+// Global state for theme blocks (shared between PostMessageBridge and Editor)
+let globalThemeBlocks: Record<string, ThemeBlock> = {};
+let themeBlocksUpdateCallback: ((blocks: Record<string, ThemeBlock>) => void) | null = null;
+
+
+
+// PostMessage Bridge Component - handles cross-domain communication with Mautic
+function PostMessageBridge({
+  values,
+  restart,
+  mergeTags,
+  onMergeTagsReceived,
+}: {
+  values: IEmailTemplate;
+  restart: (val: IEmailTemplate) => void;
+  mergeTags: Record<string, any>;
+  onMergeTagsReceived?: (tags: Record<string, any>) => void;
+}) {
+  const [initialized, setInitialized] = useState(false);
+
+  useEffect(() => {
+    // Get parent origin from URL params
+    // Same-origin - parent is always at window.location.origin
+    const parentOrigin = window.location.origin;
+
+    console.log("PostMessageBridge: Initialized, parentOrigin:", parentOrigin);
+
+    const handleMessage = (event: MessageEvent) => {
+      // Only process messages from parent window (ignore self-messages)
+      if (event.source === window) {
+        return;
+      }
+
+      const data = event.data;
+      if (!data || typeof data !== 'object' || !data.type) {
+        return;
+      }
+
+      console.log('PostMessageBridge: Received message:', data.type, data);
+
+      switch (data.type) {
+        case 'INIT':
+          handleInit(data);
+          break;
+        case 'GET_CONTENT':
+          sendContent();
+          break;
+      }
+    };
+
+    const handleInit = (payload: { json?: any; html?: string; mjml?: string; template?: string; themeBlocks?: Record<string, ThemeBlock>; mergeTags?: Record<string, any> }) => {
+      console.log('PostMessageBridge: handleInit called with:', {
+        hasJson: !!payload.json,
+        hasMjml: !!payload.mjml,
+        hasHtml: !!payload.html,
+        template: payload.template,
+        themeBlocksCount: payload.themeBlocks ? Object.keys(payload.themeBlocks).length : 0
+      });
+
+      // Handle theme blocks from Mautic
+      if (payload.themeBlocks && Object.keys(payload.themeBlocks).length > 0) {
+        globalThemeBlocks = payload.themeBlocks;
+        if (themeBlocksUpdateCallback) {
+          themeBlocksUpdateCallback(payload.themeBlocks);
+        }
+        console.log('PostMessageBridge: Theme blocks received:', Object.keys(payload.themeBlocks));
+      }
+
+      // Handle mergeTags from Mautic
+      if (payload.mergeTags && Object.keys(payload.mergeTags).length > 0 && onMergeTagsReceived) {
+        onMergeTagsReceived(payload.mergeTags);
+        console.log('PostMessageBridge: MergeTags received:', Object.keys(payload.mergeTags).length, 'tokens');
+      }
+
+      // For new templates without MJML, use default. Otherwise import the content.
+      if (payload.template === 'new' && !payload.mjml && !payload.json) {
+        console.log('PostMessageBridge: New template without content, using default');
+        return;
+      }
+
+      try {
+        if (payload.json) {
+          const jsonData = typeof payload.json === 'string' ? JSON.parse(payload.json) : payload.json;
+          console.log('PostMessageBridge: Parsed JSON, has content:', !!jsonData.content);
+
+          if (jsonData.content) {
+            restart({
+              subject: jsonData.subject || 'Email',
+              content: jsonData.content,
+              subTitle: jsonData.subTitle || '',
+            });
+          } else {
+            restart({
+              subject: 'Email',
+              content: jsonData,
+              subTitle: '',
+            });
+          }
+          console.log('PostMessageBridge: JSON content imported successfully');
+        } else if (payload.mjml) {
+          console.log('PostMessageBridge: Converting MJML, length:', payload.mjml.length);
+          const content = MjmlToJson(payload.mjml);
+          restart({
+            subject: 'Imported Email',
+            content,
+            subTitle: '',
+          });
+          console.log('PostMessageBridge: MJML content imported successfully');
+        } else if (payload.html) {
+          console.log('PostMessageBridge: HTML only received - cannot import rendered HTML');
+        } else {
+          console.log('PostMessageBridge: No content to import');
+        }
+      } catch (error: any) {
+        console.error('PostMessageBridge: Failed to import:', error);
+        if (parentOrigin) {
+          window.parent.postMessage({ type: 'ERROR', message: error.message }, parentOrigin);
+        }
+      }
+    };
+
+    const sendContent = () => {
+      if (!parentOrigin) return;
+
+      const mjmlString = JsonToMjml({
+        data: values.content,
+        mode: 'production',
+        context: values.content,
+        dataSource: mergeTags,
+      });
+      const html = mjml(mjmlString, {}).html;
+
+      window.parent.postMessage({
+        type: 'CONTENT',
+        html,
+        mjml: mjmlString,
+        json: values,
+      }, parentOrigin);
+    };
+
+    window.addEventListener('message', handleMessage);
+
+    // Send READY to parent after mount
+    if (parentOrigin && window.parent !== window && !initialized) {
+      setInitialized(true);
+      setTimeout(() => {
+        window.parent.postMessage({ type: 'READY' }, parentOrigin);
+        console.log('PostMessageBridge: Sent READY to', parentOrigin);
+      }, 100);
+    }
+
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
+  }, [values, restart, mergeTags, initialized]);
+
+  return null;
+}
+
+// Helper function to send save message to parent (Mautic)
+function sendSaveToParent(values: IEmailTemplate, mergeTags: Record<string, any>) {
+  // Same-origin - always use window.location.origin
+  const origin = window.location.origin;
+
+  if (window.parent === window) {
+    return; // Not in iframe
+  }
+
+  try {
+    const mjmlString = JsonToMjml({
+      data: values.content,
+      mode: 'production',
+      context: values.content,
+      dataSource: mergeTags,
+    });
+    const html = mjml(mjmlString, {}).html;
+
+    window.parent.postMessage({
+      type: 'SAVE',
+      html,
+      mjml: mjmlString,
+      json: values,
+    }, origin);
+    console.log('PostMessageBridge: Sent SAVE to parent');
+  } catch (error) {
+    console.error('PostMessageBridge: Failed to send save:', error);
+  }
+}
 
 const defaultCategories: ExtensionProps['categories'] = [
   {
@@ -131,45 +329,68 @@ const defaultCategories: ExtensionProps['categories'] = [
       },
     ],
   },
-  {
-    label: 'Custom',
-    active: true,
-    displayType: 'custom',
-    blocks: [
-      <BlockAvatarWrapper type={CustomBlocksType.PRODUCT_RECOMMENDATION}>
-        <div
-          style={{
-            position: 'relative',
-            border: '1px solid #ccc',
-            marginBottom: 20,
-            width: '80%',
-            marginLeft: 'auto',
-            marginRight: 'auto',
-          }}
-        >
-          <img
-            src={
-              'http://res.cloudinary.com/dwkp0e1yo/image/upload/v1665841389/ctbjtig27parugrztdhk.png'
-            }
-            style={{
-              maxWidth: '100%',
-            }}
-          />
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              height: '100%',
-              zIndex: 2,
-            }}
-          />
-        </div>
-      </BlockAvatarWrapper>,
-    ],
-  },
 ];
+
+// Helper function to convert MJML to block data
+function mjmlToBlockData(mjmlContent: string): IBlockData | null {
+  try {
+    // Check if content already starts with mj-section (complex block)
+    const isSection = mjmlContent.trim().startsWith('<mj-section');
+    
+    let fullMjml: string;
+    if (isSection) {
+      // For sections, wrap only in mjml/mj-body
+      fullMjml = '<mjml><mj-body>' + mjmlContent + '</mj-body></mjml>';
+    } else {
+      // For simple elements, wrap in full structure
+      fullMjml = '<mjml><mj-body><mj-section><mj-column>' + mjmlContent + '</mj-column></mj-section></mj-body></mjml>';
+    }
+    
+    console.log('mjmlToBlockData: Parsing MJML, isSection:', isSection);
+    const pageData = MjmlToJson(fullMjml);
+    console.log('mjmlToBlockData: Full parsed structure:', JSON.stringify(pageData, null, 2).substring(0, 500));
+    
+    // MjmlToJson structure: page -> section -> column -> element
+    // (no separate "body" wrapper - mj-body content goes directly under page)
+    
+    if (!pageData.children || pageData.children.length === 0) {
+      console.error('mjmlToBlockData: No children in page');
+      return null;
+    }
+    
+    // First child is the section
+    const section = pageData.children[0];
+    console.log('mjmlToBlockData: section type:', section?.type);
+    
+    if (isSection) {
+      // For mj-section blocks, return the section itself
+      console.log('mjmlToBlockData: Returning section block');
+      return section;
+    }
+    
+    // For simple elements, navigate to column -> element
+    if (!section.children || section.children.length === 0) {
+      console.error('mjmlToBlockData: No children in section');
+      return section;
+    }
+    
+    const column = section.children[0];
+    console.log('mjmlToBlockData: column type:', column?.type);
+    
+    if (!column.children || column.children.length === 0) {
+      console.error('mjmlToBlockData: No children in column');
+      return column;
+    }
+    
+    const element = column.children[0];
+    console.log('mjmlToBlockData: element type:', element?.type);
+    
+    return element;
+  } catch (error) {
+    console.error('Failed to parse MJML block:', error);
+    return null;
+  }
+}
 
 const imageCompression = import('browser-image-compression');
 
@@ -181,24 +402,74 @@ const fontList = [
   'Courier New',
   'Georgia',
   'Lato',
-  'Montserrat',
-  '黑体',
-  '仿宋',
-  '楷体',
-  '标楷体',
-  '华文仿宋',
-  '华文楷体',
-  '宋体',
-  '微软雅黑',
+  'Montserrat'
 ].map(item => ({ value: item, label: item }));
 
 export default function Editor() {
   const [isDarkMode, setIsDarkMode] = useState(false);
-  const [theme, setTheme] = useState<'blue' | 'green' | 'purple'>('blue');
+  const [theme, setTheme] = useState<'blue' | 'green' | 'purple'>('purple');
   const dispatch = useDispatch();
   const history = useHistory();
-  const templateData = useAppSelector('template');
-  const [locale, setLocale] = useState('en');
+  var templateData = useAppSelector('template');
+  const [locale, setLocale] = useState(new URLSearchParams(window.location.search).get('locale') || 'de');
+  const [themeBlocks, setThemeBlocks] = useState<Record<string, ThemeBlock>>(globalThemeBlocks);
+  
+  // Register callback for theme blocks updates from PostMessageBridge
+  useEffect(() => {
+    themeBlocksUpdateCallback = setThemeBlocks;
+    // If blocks were already received before component mounted
+    if (Object.keys(globalThemeBlocks).length > 0) {
+      setThemeBlocks(globalThemeBlocks);
+    }
+    return () => {
+      themeBlocksUpdateCallback = null;
+    };
+  }, []);
+
+  // Build dynamic categories including theme blocks
+  const dynamicCategories = useMemo(() => {
+    const categories = [...defaultCategories];
+    
+    if (Object.keys(themeBlocks).length > 0) {
+      console.log('Editor: Building theme category with', Object.keys(themeBlocks).length, 'blocks');
+      
+      const themeBlocksList = Object.entries(themeBlocks)
+        .map(([key, block]) => {
+          console.log('Editor: Processing block:', key, 'label:', block.label);
+          const blockData = mjmlToBlockData(block.content);
+          if (!blockData) {
+            console.error('Editor: Failed to parse block:', key);
+            return null;
+          }
+          
+          console.log('Editor: Block', key, 'parsed as type:', blockData.type);
+          
+          return {
+            type: blockData.type,
+            title: block.label,  // Use label from blocks.json
+            payload: blockData,
+          };
+        })
+        .filter(Boolean);
+      
+      if (themeBlocksList.length > 0) {
+        categories.splice(1, 0, {
+          label: 'Theme',
+          active: true,
+          blocks: themeBlocksList as any[],
+        });
+        console.log('Editor: Theme category added with', themeBlocksList.length, 'blocks');
+      }
+    }
+    
+    return categories;
+  }, [themeBlocks]);
+  const isEmbedded = useMemo(() => {
+    // Always embedded mode - editor is part of Mautic plugin
+    return true;
+    // Same-origin - parent is always at window.location.origin
+    // return urlParams.has("origin");
+  }, []);
   const { addCollection, removeCollection, collectionCategory } = useCollection();
   const [visible, setVisible] = useState(false);
   const [text, setText] = useState('');
@@ -249,6 +520,8 @@ export default function Editor() {
     }
   }, [collectionCategory]);
 
+  
+
   useEffect(() => {
     if (id) {
       if (!userId) {
@@ -274,8 +547,148 @@ export default function Editor() {
       document.body.removeAttribute('arco-theme');
     }
   }, [isDarkMode]);
+  // Intercept upload button clicks in embedded mode to open asset manager directly
+  useEffect(() => {
+    if (!isEmbedded) return;
+    
+    // Same-origin - parent is always at window.location.origin
+    const parentOrigin = window.location.origin;
+    if (!parentOrigin) return;
+    
+    let activeInputField: HTMLInputElement | null = null;
+    
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      
+      // Check if click is on upload div (class starts with _upload_)
+      const uploadDiv = target.closest('[class*="_upload_"]') as HTMLElement;
+      if (uploadDiv && uploadDiv.className.match(/_upload_[a-z0-9]+/i)) {
+        // Find the associated input field in the container
+        const container = uploadDiv.closest('[class*="_container_"]') || uploadDiv.parentElement;
+        const inputField = container?.querySelector('input') as HTMLInputElement;
+        
+        if (inputField) {
+          activeInputField = inputField;
+        }
+        
+        // Prevent the default file dialog
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        // Open asset manager
+        window.parent.postMessage({ type: 'OPEN_ASSET_MANAGER' }, parentOrigin);
+        return;
+      }
+      
+      // Also check if click is on upload button (fallback for other upload elements)
+      const uploadButton = target.closest('button');
+      if (!uploadButton) return;
+      
+      // Look for IconUpload SVG or upload-related button
+      const hasUploadIcon = uploadButton.querySelector('svg[class*="icon-upload"]') ||
+                           uploadButton.querySelector('[class*="IconUpload"]') ||
+                           uploadButton.innerHTML.includes('M4 16v1a3') || // IconUpload path
+                           (uploadButton.getAttribute('class') || '').includes('upload');
+      
+      // Also check for arco icon upload class
+      const arcoIcon = uploadButton.querySelector('.arco-icon-upload');
+      
+      if (!hasUploadIcon && !arcoIcon) return;
+      
+      // Find the associated input field
+      const container = uploadButton.closest('.easy-email-extensions') || 
+                       uploadButton.closest('[class*="ImageUploader"]') ||
+                       uploadButton.parentElement?.parentElement;
+      const inputField = container?.querySelector('input[type="text"]') as HTMLInputElement;
+      
+      if (inputField) {
+        activeInputField = inputField;
+      }
+      
+      // Prevent the default file dialog
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      
+      // Open asset manager
+      window.parent.postMessage({ type: 'OPEN_ASSET_MANAGER' }, parentOrigin);
+    };
+    
+    const handleMessage = (event: MessageEvent) => {
+      if (event.origin !== parentOrigin) return;
+      
+      if (event.data?.type === 'ASSET_SELECTED' && event.data.url) {
+        if (activeInputField) {
+          // Update the input field value
+          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, 'value'
+          )?.set;
+          nativeInputValueSetter?.call(activeInputField, event.data.url);
+          
+          // Trigger input event for React to pick up the change
+          const inputEvent = new Event('input', { bubbles: true });
+          activeInputField.dispatchEvent(inputEvent);
+          
+          // Also trigger change event
+          const changeEvent = new Event('change', { bubbles: true });
+          activeInputField.dispatchEvent(changeEvent);
+          
+          activeInputField = null;
+        }
+      }
+    };
+    
+    // Use capture phase to intercept before the Uploader
+    document.addEventListener('click', handleClick, true);
+    window.addEventListener('message', handleMessage);
+    
+    return () => {
+      document.removeEventListener('click', handleClick, true);
+      window.removeEventListener('message', handleMessage);
+    };
+  }, [isEmbedded]);
 
-  const onUploadImage = async (blob: Blob) => {
+  const onUploadImage = useCallback(async (blob: Blob): Promise<string> => {
+    // Check if we are in Mautic iframe mode
+    // Same-origin - parent is always at window.location.origin
+    const parentOrigin = window.location.origin;
+    
+    if (parentOrigin && window.parent !== window) {
+      // Embedded mode: Use Mautic Asset Manager via PostMessage
+      return new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          window.removeEventListener('message', handler);
+          // Fallback: If no response, try direct upload
+          handleDirectUpload(blob).then(resolve).catch(reject);
+        }, 60000); // 60 second timeout
+        
+        const handler = (event: MessageEvent) => {
+          if (event.origin !== parentOrigin) return;
+          
+          if (event.data?.type === 'ASSET_SELECTED') {
+            clearTimeout(timeoutId);
+            window.removeEventListener('message', handler);
+            resolve(event.data.url);
+          } else if (event.data?.type === 'ASSET_CANCELLED') {
+            clearTimeout(timeoutId);
+            window.removeEventListener('message', handler);
+            reject(new Error('Asset selection cancelled'));
+          }
+        };
+        
+        window.addEventListener('message', handler);
+        
+        // Request Mautic to open asset manager
+        window.parent.postMessage({ type: 'OPEN_ASSET_MANAGER' }, parentOrigin);
+      });
+    }
+    
+    // Standalone mode: Use direct upload
+    return handleDirectUpload(blob);
+  }, []);
+  
+  const handleDirectUpload = async (blob: Blob): Promise<string> => {
     const compressionFile = await (
       await imageCompression
     ).default(blob as File, {
@@ -283,7 +696,6 @@ export default function Editor() {
     });
     return services.common.uploadByQiniu(compressionFile);
   };
-
   const onChangeTheme = useCallback(t => {
     setTheme(t);
   }, []);
@@ -377,7 +789,6 @@ export default function Editor() {
     });
 
     pushEvent({ event: 'MJMLExport', payload: { values, mergeTags } });
-    navigator.clipboard.writeText(mjmlString);
     saveAs(new Blob([mjmlString], { type: 'text/mjml' }), 'easy-email.mjml');
   };
 
@@ -392,12 +803,10 @@ export default function Editor() {
     const html = mjml(mjmlString, {}).html;
 
     pushEvent({ event: 'HTMLExport', payload: { values, mergeTags } });
-    navigator.clipboard.writeText(html);
     saveAs(new Blob([html], { type: 'text/html' }), 'easy-email.html');
   };
 
   const onExportJSON = (values: IEmailTemplate) => {
-    navigator.clipboard.writeText(JSON.stringify(values, null, 2));
     saveAs(
       new Blob([JSON.stringify(values, null, 2)], { type: 'application/json' }),
       'easy-email.json',
@@ -434,6 +843,7 @@ export default function Editor() {
   const initialValues: IEmailTemplate | null = useMemo(() => {
     if (!templateData) return null;
     const sourceData = cloneDeep(templateData.content) as IBlockData;
+
     return {
       ...templateData,
       content: sourceData, // replace standard block
@@ -446,6 +856,10 @@ export default function Editor() {
       form: FormApi<IEmailTemplate, Partial<IEmailTemplate>>,
     ) => {
       pushEvent({ event: 'EmailSave' });
+
+      // Send to parent via postMessage (for Mautic integration)
+      sendSaveToParent(values, mergeTags);
+
       if (id) {
         const isChanged = !(
           isEqual(initialValues?.content, values.content) &&
@@ -481,7 +895,7 @@ export default function Editor() {
         );
       }
     },
-    [dispatch, history, id, initialValues],
+    [dispatch, history, id, initialValues, mergeTags],
   );
 
   const onBeforePreview: EmailEditorProviderProps['onBeforePreview'] = useCallback(
@@ -509,6 +923,7 @@ export default function Editor() {
 
   if (!initialValues) return null;
 
+
   return (
     <ConfigProvider locale={enUS}>
       <div>
@@ -532,7 +947,7 @@ export default function Editor() {
           // enabledMergeTagsBadge
           dashed={false}
           mergeTags={mergeTags}
-          mergeTagGenerate={tag => `{{${tag}}}`}
+          mergeTagGenerate={tag => `{${tag}}`}
           onBeforePreview={onBeforePreview}
           socialIcons={[]}
           locale={localesData[locale]}
@@ -540,11 +955,31 @@ export default function Editor() {
           {({ values }, { submit, restart }) => {
             return (
               <>
+                <PostMessageBridge values={values} restart={restart} mergeTags={mergeTags} onMergeTagsReceived={setMergeTags} />
+                {isEmbedded && (
+                  <Button
+                    type="primary"
+                    status="success"
+                    style={{
+                      position: "absolute",
+                      top: "10px",
+                      left: "20px",
+                      zIndex: 10001,
+                    }}
+                    onClick={() => {
+                      sendSaveToParent(values, mergeTags);
+                      // Same-origin - parent is always at window.location.origin
+                      const origin = window.location.origin;
+                      if (window.parent !== window) {
+                        window.parent.postMessage({ type: "CLOSE" }, origin);
+                      }
+                    }}
+                  >
+                    Exit
+                  </Button>
+                )}
                 <PageHeader
                   style={{ background: 'var(--color-bg-2)' }}
-                  backIcon
-                  title='Edit'
-                  onBack={() => history.push('/')}
                   extra={
                     <Stack alignment='center'>
                       <Button
@@ -554,26 +989,28 @@ export default function Editor() {
                         icon={isDarkMode ? <IconMoonFill /> : <IconSunFill />}
                       ></Button>
 
-                      <Select
-                        onChange={onChangeTheme}
-                        value={theme}
-                      >
-                        <Select.Option value='blue'>Blue</Select.Option>
-                        <Select.Option value='green'>Green</Select.Option>
-                        <Select.Option value='purple'>Purple</Select.Option>
-                      </Select>
-                      <Select
-                        onChange={setLocale}
-                        value={locale}
-                      >
-                        <Select.Option value='en'>English</Select.Option>
-                        <Select.Option value='zh-Hans'>中文简体</Select.Option>
-                        <Select.Option value='zh-Hant'>中文繁體</Select.Option>
-                        <Select.Option value='ja'>Japanese</Select.Option>
-                        <Select.Option value='it'>Italian</Select.Option>
-                      </Select>
+                      {!isEmbedded && (
+                        <>
+                          <Select
+                            onChange={onChangeTheme}
+                            value={theme}
+                          >
+                            <Select.Option value='blue'>Blue</Select.Option>
+                            <Select.Option value='green'>Green</Select.Option>
+                            <Select.Option value='purple'>Purple</Select.Option>
+                          </Select>
+                          <Select
+                            onChange={setLocale}
+                            value={locale}
+                          >
+                            <Select.Option value='en'>English</Select.Option>
+                            <Select.Option value='de'>Deutsch</Select.Option>
+                          </Select>
+                        </>
+                      )}
 
                       {/* <Button onClick={openMergeTagsModal}>Update mergeTags</Button> */}
+                      {!isEmbedded && (<>
 
                       <Dropdown
                         droplist={
@@ -614,18 +1051,6 @@ export default function Editor() {
                             >
                               Export HTML
                             </Menu.Item>
-                            <Menu.Item
-                              key='Export JSON'
-                              onClick={() => onExportJSON(values)}
-                            >
-                              Export JSON
-                            </Menu.Item>
-                            <Menu.Item
-                              key='Export Image'
-                              onClick={() => onExportImage(values)}
-                            >
-                              Export Image
-                            </Menu.Item>
                           </Menu>
                         }
                       >
@@ -633,42 +1058,17 @@ export default function Editor() {
                           <strong>Export</strong>
                         </Button>
                       </Dropdown>
-                      <Button onClick={() => setVisible(true)}>
-                        <strong>Try responsive editor</strong>
-                      </Button>
-                      <a
-                        href='https://www.buymeacoffee.com/easyemail?utm_source=webside&utm_medium=button&utm_content=donate'
-                        target='_blank'
-                        onClick={ev => {
-                          ev.preventDefault();
-                          pushEvent({ event: 'Donate' });
-                          window.open(
-                            'https://www.buymeacoffee.com/easyemail?utm_source=webside&utm_medium=button&utm_content=donate',
-                            '_blank',
-                          );
-                        }}
-                      >
-                        <img
-                          style={{
-                            marginTop: -16,
-                            position: 'relative',
-                            top: 11,
-                            height: 32,
-                          }}
-                          src='https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png'
-                          alt='Buy Me A Coffee'
-                        />
-                      </a>
+                      </>)}
                     </Stack>
                   }
                 />
                 <StandardLayout
                   compact={!smallScene}
-                  categories={defaultCategories}
+                  categories={dynamicCategories}
                 >
                   <EmailEditor />
                 </StandardLayout>
-                <AutoSaveAndRestoreEmail />
+                {!isEmbedded && <AutoSaveAndRestoreEmail />}
               </>
             );
           }}

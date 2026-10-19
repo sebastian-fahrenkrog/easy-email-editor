@@ -13,11 +13,12 @@ import templates from '@demo/config/templates.json';
 export default function Home() {
   const dispatch = useDispatch();
   const list = useAppSelector('templateList');
+  const history = useHistory();
 
   useEffect(() => {
     dispatch(templateList.actions.fetch(undefined));
   }, [dispatch]);
-
+  
   return (
     <Frame
       title='Templates'

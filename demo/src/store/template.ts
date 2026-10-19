@@ -6,6 +6,12 @@ import { emailToImage } from '@demo/utils/emailToImage';
 import { IBlockData, BlockManager, BasicType, AdvancedType } from 'easy-email-core';
 import { IEmailTemplate } from 'easy-email-editor';
 import { getTemplate } from '@demo/config/getTemplate';
+import {
+  BlockMarketManager,
+  ExtensionProps,
+  MjmlToJson,
+  StandardLayout,
+} from 'easy-email-extensions';
 
 export function getAdaptor(data: IArticle): IEmailTemplate {
   const content = JSON.parse(data.content.content) as IBlockData;
@@ -49,8 +55,8 @@ export default createSliceState({
     },
     fetchDefaultTemplate: async state => {
       return {
-        subject: 'Welcome to Easy-email',
-        subTitle: 'Nice to meet you!',
+        subject: '',
+        subTitle: '',
         content: BlockManager.getBlockByType(BasicType.PAGE).create({
           children: [BlockManager.getBlockByType(AdvancedType.WRAPPER).create()],
         }),

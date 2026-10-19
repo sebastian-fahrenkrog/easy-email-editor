@@ -141,7 +141,7 @@ export function ImageUploader(props: ImageUploaderProps) {
     <div className={styles.wrap}>
       <div className={styles['container']}>
         {content}
-        <Grid.Row style={{ width: '100%' }}>
+        <Grid.Row style={{ width: '100%', position: 'relative', zIndex: 10 }} onClick={(e) => e.stopPropagation()}>
           {mergeTags && (
             <Popover
               trigger='click'
@@ -156,6 +156,7 @@ export function ImageUploader(props: ImageUploaderProps) {
             value={props.value}
             onChange={onChange}
             disabled={isUploading}
+            onClick={(e) => e.stopPropagation()}
 
           />
           {props.autoCompleteOptions && (
