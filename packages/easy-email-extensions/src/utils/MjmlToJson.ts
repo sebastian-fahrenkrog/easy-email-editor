@@ -30,30 +30,34 @@ export function MjmlToJson(data: MjmlBlockItem | string): IPage {
           ?.filter((item) => item.tagName === 'mj-style')
           .map((item) => ({ content: item.content, inline: item.inline }));
 
+        // Page-level values the editor manages itself. Without Easy Email metadata (a template
+        // that never went through this editor) they are taken from the template's own
+        // mj-attributes, so the editor defaults do not override the theme.
+        const pageMeta = { ...pageMetaFromAttributes(mjAttributes), ...metaData };
+        // Keys the template leaves open stay empty instead of falling back to the editor
+        // defaults (14px, -apple-system, ...). Empty values survive the metadata round trip.
+        if (Object.keys(metaData).length === 0) {
+          LIFTED_PAGE_KEYS.forEach((key) => {
+            if (pageMeta[key] === undefined) pageMeta[key] = '';
+          });
+        }
+
         const headAttributes = [
           ...new Set(
             mjAttributes
-              .filter((item) => {
-                const isFontFamily =
-                  item.tagName === 'mj-all' &&
-                  item.attributes['font-family'] === metaData['font-family'];
-                const isTextColor =
-                  item.tagName === 'mj-text' &&
-                  item.attributes['color'] === metaData['text-color'];
-                const isContentColor =
-                  ['mj-wrapper', 'mj-section'].includes(item.tagName) &&
-                  item.attributes['background-color'] ===
-                  metaData['content-background-color'];
-                return !isFontFamily && !isTextColor && !isContentColor;
-              })
+              .map((item) => withoutPageMeta(item, pageMeta))
+              .filter((item): item is IChildrenItem => Boolean(item))
               .map(
                 (item) =>
                   `<${item.tagName} ${Object.keys(item.attributes)
                     .map((key) => `${key}="${item.attributes[key]}"`)
-                    .join(' ')} />`
+                    .join(' ')}></${item.tagName}>`
               )
           ),
         ].join('\n');
+
+        const title = head?.children?.find((item) => item.tagName === 'mj-title');
+        const preview = head?.children?.find((item) => item.tagName === 'mj-preview');
 
         const breakpoint = head?.children?.find(
           (item) => item.tagName === 'mj-breakpoint'
@@ -68,7 +72,9 @@ export function MjmlToJson(data: MjmlBlockItem | string): IPage {
               headStyles: headStyles,
               fonts,
               breakpoint: breakpoint?.attributes.width,
-              ...metaData,
+              ...(title ? { title: title.content || '' } : {}),
+              ...(preview ? { preview: preview.content || '' } : {}),
+              ...pageMeta,
             },
           },
         });
@@ -169,7 +175,58 @@ export function getMetaDataFromMjml(data?: IChildrenItem): {
       return obj;
     }, {});
 
-  return pickBy(mjmlHtmlAttributes, identity);
+  // Keep empty strings: they mean "left to the template", not "use the editor default"
+  return pickBy(mjmlHtmlAttributes, (value) => value !== undefined && value !== null);
+}
+
+// mj-attributes entries the Page block writes from its own values (tag -> attribute -> page key)
+const PAGE_META_ATTRIBUTES: Record<string, Record<string, string>> = {
+  'mj-all': { 'font-family': 'font-family' },
+  'mj-text': {
+    'font-size': 'font-size',
+    color: 'text-color',
+    'line-height': 'line-height',
+    'font-weight': 'font-weight',
+  },
+  'mj-wrapper': { 'background-color': 'content-background-color' },
+  'mj-section': { 'background-color': 'content-background-color' },
+};
+
+// Page values taken over from a template. The content background is left out on purpose:
+// the Page block writes it to mj-wrapper AND mj-section, the template may only set one of them.
+const LIFTED_PAGE_KEYS = ['font-family', 'font-size', 'text-color', 'line-height', 'font-weight'];
+
+/** Page values defined by the template's mj-attributes; like MJML, a later definition wins. */
+function pageMetaFromAttributes(mjAttributes: IChildrenItem[]): { [key: string]: any } {
+  const meta: { [key: string]: any } = {};
+  mjAttributes.forEach((item) => {
+    const mapping = PAGE_META_ATTRIBUTES[item.tagName] || {};
+    Object.keys(mapping).forEach((attribute) => {
+      const key = mapping[attribute];
+      if (LIFTED_PAGE_KEYS.includes(key) && item.attributes[attribute] !== undefined) {
+        meta[key] = item.attributes[attribute];
+      }
+    });
+  });
+  return meta;
+}
+
+/**
+ * Drops the attributes the Page block re-emits with the same value. Keeping them made every
+ * save append another copy of the editor values to mj-attributes.
+ */
+function withoutPageMeta(
+  item: IChildrenItem,
+  pageMeta: { [key: string]: any }
+): IChildrenItem | null {
+  const mapping = PAGE_META_ATTRIBUTES[item.tagName] || {};
+  const attributes = pickBy(
+    item.attributes,
+    (value, attribute) =>
+      !(mapping[attribute] && pageMeta[mapping[attribute]] === value)
+  );
+  if (Object.keys(attributes).length === 0) return null;
+  return { ...item, attributes };
 }
 
 function formatPadding(

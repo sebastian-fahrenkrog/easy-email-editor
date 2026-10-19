@@ -18,6 +18,9 @@ export type IPage = IBlockData<
   {
     breakpoint?: string;
     headAttributes: string;
+    // <mj-title> and <mj-preview> of an imported template; written back unchanged
+    title?: string;
+    preview?: string;
     fonts?: { name: string; href: string }[];
     headStyles?: {
       content?: string;
@@ -76,7 +79,7 @@ export const Page = createBlock<IPage>({
     const value = data.data.value;
 
     const breakpoint = value.breakpoint
-      ? `<mj-breakpoint width="${data.data.value.breakpoint}" />`
+      ? `<mj-breakpoint width="${data.data.value.breakpoint}"></mj-breakpoint>`
       : '';
 
     const nonResponsive = !value.responsive
@@ -103,6 +106,12 @@ export const Page = createBlock<IPage>({
         }</mj-style>`
       : '';
 
+    // Explicit closing tags throughout the head: GrapesJS (Mautic's other builder) nests
+    // the following siblings under a self-closing mj-* tag when it opens the same email.
+    const title = value.title !== undefined ? `<mj-title>${value.title}</mj-title>` : '';
+    const preview =
+      value.preview !== undefined ? `<mj-preview>${value.preview}</mj-preview>` : '';
+
     const extraHeadContent = value.extraHeadContent
       ? `<mj-raw>${value.extraHeadContent}</mj-raw>`
       : '';
@@ -112,6 +121,8 @@ export const Page = createBlock<IPage>({
         {`
           <mjml>
           <mj-head>
+              ${title}
+              ${preview}
               ${metaData}
               ${nonResponsive}
               ${styles}
@@ -120,22 +131,23 @@ export const Page = createBlock<IPage>({
               ${extraHeadContent}
               ${value.fonts
                 ?.filter(Boolean)
-                .map(item => `<mj-font name="${item.name}" href="${item.href}" />`)}
+                .map(item => `<mj-font name="${item.name}" href="${item.href}"></mj-font>`)
+                .join('\n')}
             <mj-attributes>
               ${value.headAttributes}
               ${
                 value['font-family']
-                  ? `<mj-all font-family="${value['font-family'].replace(/"/gm, '')}" />`
+                  ? `<mj-all font-family="${value['font-family'].replace(/"/gm, '')}"></mj-all>`
                   : ''
               }
-              ${value['font-size'] ? `<mj-text font-size="${value['font-size']}" />` : ''}
-              ${value['text-color'] ? `<mj-text color="${value['text-color']}" />` : ''}
-        ${value['line-height'] ? `<mj-text line-height="${value['line-height']}" />` : ''}
-        ${value['font-weight'] ? `<mj-text font-weight="${value['font-weight']}" />` : ''}
+              ${value['font-size'] ? `<mj-text font-size="${value['font-size']}"></mj-text>` : ''}
+              ${value['text-color'] ? `<mj-text color="${value['text-color']}"></mj-text>` : ''}
+        ${value['line-height'] ? `<mj-text line-height="${value['line-height']}"></mj-text>` : ''}
+        ${value['font-weight'] ? `<mj-text font-weight="${value['font-weight']}"></mj-text>` : ''}
               ${
                 value['content-background-color']
-                  ? `<mj-wrapper background-color="${value['content-background-color']}" />
-             <mj-section background-color="${value['content-background-color']}" />
+                  ? `<mj-wrapper background-color="${value['content-background-color']}"></mj-wrapper>
+             <mj-section background-color="${value['content-background-color']}"></mj-section>
             `
                   : ''
               }
